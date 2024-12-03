@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Audio Room</title>
+  </head>
+  <body>
+    <h3> Remote Audio </h3>
+    <div id="remoteAudios"></div> <br />
+
+    <h3> Logs </h3>
+    <div id="logs"></div>
+
+    <h3> Controls </h3>
+    <button id="toggleMic">Toggle Mic</button>
+
+    <script>
+      let audioTrack = null; // Biến lưu track audio cục bộ
+
+      // Lấy stream audio từ thiết bị người dùng
+      navigator.mediaDevices.getUserMedia({ video: false, audio: true })
+        .then(stream => {
+          let pc = new RTCPeerConnection();
+
+          // Lưu lại audio track để bật/tắt mic
+          audioTrack = stream.getAudioTracks()[0];
+
+          pc.ontrack = function (event) {
+            console.log("Received track:", event);
+
+            // Nếu là audio track, thêm nó vào một <audio> element
+            if (event.track.kind === 'audio') {
+              let el = document.createElement('audio');
+              el.srcObject = new MediaStream([event.track]); // Tạo MediaStream từ track
+              el.autoplay = true;
+              el.controls = true;
+              document.getElementById('remoteAudios').appendChild(el);
+            }
+          };
+
+          // Thêm các track vào RTCPeerConnection
+          stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+          // Ban đầu tắt mic
+          audioTrack.enabled = false;
+
+          // Kết nối WebSocket tới server
+          let ws = new WebSocket("{{.}}");
+          pc.onicecandidate = e => {
+            if (!e.candidate) {
+              return;
+            }
+            ws.send(JSON.stringify({ event: 'candidate', data: JSON.stringify(e.candidate) }));
+          };
+
+          // Xử lý các message từ server
+          ws.onmessage = function (evt) {
+            let msg = JSON.parse(evt.data);
+            if (!msg) {
+              return console.log('Failed to parse message');
+            }
+
+            switch (msg.event) {
+              case 'offer':
+                console.log("Received offer:", msg.data);
+                let offer = JSON.parse(msg.data);
+                if (!offer) {
+                  return console.log('Failed to parse offer');
+                }
+                pc.setRemoteDescription(offer);
+                pc.createAnswer().then(answer => {
+                  pc.setLocalDescription(answer);
+                  ws.send(JSON.stringify({ event: 'answer', data: JSON.stringify(answer) }));
+                });
+                return;
+
+              case 'candidate':
+                let candidate = JSON.parse(msg.data);
+                if (!candidate) {
+                  return console.log('Failed to parse candidate');
+                }
+                pc.addIceCandidate(candidate);
+            }
+          };
+        })
+        .catch(window.alert);
+
+      // Thêm sự kiện click cho nút "Toggle Mic"
+      document.getElementById('toggleMic').addEventListener('click', () => {
+        if (audioTrack) {
+          audioTrack.enabled = !audioTrack.enabled; // Đảo trạng thái mic
+          console.log(`Microphone is now ${audioTrack.enabled ? 'ON' : 'OFF'}`);
+        } else {
+          console.warn("No audio track available");
+        }
+      });
+    </script>
+  </body>
+</html>
